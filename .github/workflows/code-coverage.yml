@@ -1,0 +1,105 @@
+name: Code Coverage
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+  pull_request:
+      branches:
+        - main
+      paths:
+        - "backend/**"
+  workflow_dispatch:
+
+jobs:
+  code-coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      BOOKING_SERVICE_URL: http://booking-service:8000
+      DESK_INVENTORY_SERVICE_URL: http://desk-inventory-service:8000
+      USER_SERVICE_URL: http://user-service:8000
+      OCCUPANCY_SERVICE_URL: http://occupancy-service:8000
+      DESK_INTEGRATION_SERVICE_URL: http://desk-integration-service:8000
+      SCHEDULING_SERVICE_URL: http://scheduling-service:8000
+      DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy_db
+      AMQP_URL: amqp://dummy:dummy@localhost:5672/
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.13
+
+      - name: Install pip and uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+
+      - name: Run pytest for Gateway
+        working-directory: backend/gateway
+        run: |
+          uv run sync
+          uv run pytest --cov=src --cov-report=term
+          mv .coverage ../.coverage.gateway
+
+      - name: Run pytest for Booking Service
+        working-directory: backend/booking-service
+        run: |
+          uv run sync
+          uv run pytest --cov=src --cov-report=term
+          mv .coverage ../.coverage.booking
+
+      - name: Run pytest for Desk Inventory Service
+        working-directory: backend/desk-inventory-service
+        run: |
+          uv run sync
+          uv run pytest --cov=src --cov-report=term
+          mv .coverage ../.coverage.desk_inventory
+
+      - name: Run pytest for User Service
+        working-directory: backend/user-service
+        run: |
+          uv run sync
+          uv run pytest --cov=src --cov-report=term
+          mv .coverage ../.coverage.user
+
+      - name: Run pytest for Occupancy Service
+        working-directory: backend/occupancy-service
+        run: |
+          uv run sync
+          uv run pytest --cov=src --cov-report=term
+          mv .coverage ../.coverage.occupancy
+
+      - name: Run pytest for Desk Integration Service
+        working-directory: backend/desk-integration-service
+        run: |
+          uv run sync
+          uv run pytest --cov=src --cov-report=term
+          mv .coverage ../.coverage.desk_integration
+      
+    #   - name: Run pytest for Scheduling Service
+    #     working-directory: backend/scheduling-service
+    #     run: |
+    #       uv run sync
+    #       uv run pytest --cov=src --cov-report=term
+    #       mv .coverage ../.coverage.scheduling
+      
+      - name: Merge coverage reports
+        working-directory: backend
+        run: |
+          pip install coverage
+          coverage combine .coverage.*
+          coverage xml -o coverage-combined.xml
+
+      - name: Upload merged coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: backend-combined-coverage

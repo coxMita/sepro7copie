@@ -1,0 +1,73 @@
+name: CI Scheduler Service
+
+on:
+  push:
+    branches: 
+      - main
+    paths: 
+      - "backend/scheduler-service/**"
+  pull_request:
+    branches: 
+      - main
+    paths: 
+      - "backend/scheduler-service/**"
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/scheduler-service
+    env:
+      # Scheduler service environment variables
+      DESK_API_BASE_URL: http://localhost:8000/api/v2
+      DESK_API_KEY: test-api-key-for-ci
+      DESK_API_TIMEOUT_SECONDS: 10
+      RABBITMQ_HOST: localhost
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      RABBITMQ_EXCHANGE: desk_scheduler_events
+      RABBITMQ_EXCHANGE_TYPE: topic
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.13
+
+      - name: Install pip and uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff format check
+        run: uv run ruff format --check
+
+      - name: Ruff lint
+        run: uv run ruff check
+
+      - name: Run pytest with coverage (if tests exist)
+        run: |
+          if [ -d "tests" ]; then
+            uv run pytest --cov=src --cov-report=xml
+          else
+            echo "No tests directory found, skipping pytest"
+          fi
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        if: hashFiles('coverage.xml') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: scheduler-service
+          name: scheduler-service-coverage
+          fail_ci_if_error: false

@@ -1,0 +1,49 @@
+name: CI Booking Service
+
+on:
+  push:
+    branches: 
+      - main
+    paths: 
+      - "backend/booking-service/**"
+  pull_request:
+    branches: 
+      - main
+    paths: 
+      - "backend/booking-service/**"
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/booking-service
+    env:
+      DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy_db
+      AMQP_URL: amqp://dummy:dummy@localhost:5672/
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.13
+
+      - name: Install pip and uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+
+      - name: Install dependencies
+        run: uv run sync
+
+      - name: Ruff format
+        run: uv run ruff format
+
+      - name: Ruff check
+        run: uv run ruff check --fix
+
+      - name: Run pytest
+        run: uv run pytest

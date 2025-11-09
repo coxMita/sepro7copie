@@ -1,0 +1,266 @@
+networks:
+    frontend:
+        driver: bridge
+    backend:
+        driver: bridge
+    mqtt:
+        driver: bridge
+
+    booking-net:
+        driver: bridge
+    desk-inventory-net:
+        driver: bridge
+    user-net:
+        driver: bridge
+    occupancy-net:
+        driver: bridge
+
+volumes:
+    booking_db_data:
+    desk_inventory_db_data:
+    user_db_data:
+    occupancy_db_data:
+    pgadmin_data:
+
+services:
+    gateway:
+        image: 44sven/sepro-g7-gateway:v0.0.5
+        container_name: gateway
+        restart: unless-stopped
+        ports:
+        - "8080:8000"
+        networks:
+        - frontend
+        - backend
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+
+    booking-service:
+        image: 44sven/sepro-g7-booking-service:v0.0.3
+        container_name: booking-service
+        restart: unless-stopped
+        ports:
+            - "8090:8000"
+        networks:
+            - backend
+            - booking-net
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            booking-db:
+                condition: service_healthy
+
+    booking-db:
+        image: postgres:17
+        container_name: booking-db
+        restart: always
+        environment:
+            POSTGRES_USER: ${BOOKING_DB_USER}
+            POSTGRES_PASSWORD: ${BOOKING_DB_PASS}
+            POSTGRES_DB: ${BOOKING_DB_NAME}
+        ports:
+            - "5432:5432"
+        volumes:
+            - booking_db_data:/var/lib/postgresql/data
+        networks:
+            - booking-net
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${BOOKING_DB_USER} -d ${BOOKING_DB_NAME}"]
+            interval: 5s
+            timeout: 10s
+            retries: 5
+            start_period: 5s
+
+    desk-inventory-service:
+        image: 44sven/sepro-g7-desk-inventory-service:v0.0.1
+        container_name: desk-inventory-service
+        restart: unless-stopped
+        ports:
+            - "8091:8000"
+        networks:
+            - backend
+            - desk-inventory-net
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            desk-inventory-db:
+                condition: service_healthy
+
+
+    desk-inventory-db:
+        image: postgres:17
+        container_name: desk-inventory-db
+        restart: always
+        environment:
+            POSTGRES_USER: ${INVENTORY_DB_USER}
+            POSTGRES_PASSWORD: ${INVENTORY_DB_PASS}
+            POSTGRES_DB: ${INVENTORY_DB_NAME}
+        ports:
+            - "5433:5432"
+        volumes:
+            - desk_inventory_db_data:/var/lib/postgresql/data
+        networks:
+            - desk-inventory-net
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${INVENTORY_DB_USER} -d ${INVENTORY_DB_NAME}"]
+            interval: 5s
+            timeout: 10s
+            retries: 5
+            start_period: 5s
+
+    user-service:
+        image: 44sven/sepro-g7-user-service:v0.0.1
+        container_name: user-service
+        restart: unless-stopped
+        ports:
+            - "8092:8000"
+        networks:
+            - backend
+            - user-net
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            user-db:
+                condition: service_healthy
+
+    user-db:
+        image: postgres:17
+        container_name: user-db
+        restart: always
+        environment:
+            POSTGRES_USER: ${USER_DB_USER}
+            POSTGRES_PASSWORD: ${USER_DB_PASS}
+            POSTGRES_DB: ${USER_DB_NAME}
+        ports:
+            - "5434:5432"
+        volumes:
+            - user_db_data:/var/lib/postgresql/data
+        networks:
+            - user-net
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${USER_DB_USER} -d ${USER_DB_NAME}"]
+            interval: 5s
+            timeout: 10s
+            retries: 5
+            start_period: 5s
+
+    occupancy-service:
+        image: 44sven/sepro-g7-occupancy-service:v0.0.9
+        container_name: occupancy-service
+        restart: unless-stopped
+        ports:
+            - "8093:8000"
+        networks:
+            - backend
+            - mqtt
+            - occupancy-net
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            occupancy-db:
+                condition: service_healthy
+        
+           
+
+    occupancy-db:
+        image: postgres:17
+        container_name: occupancy-db
+        restart: always
+        environment:
+            POSTGRES_USER: ${OCCUPANCY_DB_USER}
+            POSTGRES_PASSWORD: ${OCCUPANCY_DB_PASS}
+            POSTGRES_DB: ${OCCUPANCY_DB_NAME}
+        ports:
+            - "5435:5432"
+        volumes:
+            - occupancy_db_data:/var/lib/postgresql/data
+        networks:
+            - occupancy-net
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${OCCUPANCY_DB_USER} -d ${OCCUPANCY_DB_NAME}"]
+            interval: 5s
+            timeout: 10s
+            retries: 5
+            start_period: 5s
+
+    desk-integration-service:
+        image: 44sven/sepro-g7-desk-integration-service:v0.0.1
+        container_name: desk-integration-service
+        restart: unless-stopped
+        ports:
+            - "8094:8000"
+        networks:
+            - backend
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+
+    mosquitto:
+        image: eclipse-mosquitto:latest
+        container_name: mosquitto
+        ports:
+        - 1883:1883
+        volumes:
+        - ./mqtt_broker/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+        - ./mqtt_broker/mosquitto/data:/mosquitto/data
+        - ./mqtt_broker/mosquitto/log:/mosquitto/log
+        networks:
+            - mqtt
+
+    rabbitmq:
+        image: rabbitmq:4.1.4-management-alpine
+        container_name: rabbitmq
+        restart: always
+        ports:
+            - "9000:15672"
+            - "5672:5672"
+        networks:
+            - backend
+        healthcheck:
+            test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+            interval: 5s
+            timeout: 10s
+            retries: 5
+            start_period: 5s
+
+    pgadmin:
+        image: dpage/pgadmin4:9.9.0
+        container_name: pgadmin
+        restart: always
+        environment:
+            PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+            PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+        ports:
+            - "5050:80"
+        volumes:
+            - pgadmin_data:/var/lib/pgadmin
+        networks:
+            - booking-net
+            - desk-inventory-net
+            - user-net
+            - occupancy-net
+
+    scheduler-service:
+        image: 44sven/sepro-g7-scheduling-service:v1.0.8
+        container_name: scheduler-service
+        restart: unless-stopped
+        ports:
+            - "8095:8000"
+        networks:
+            - backend
+        environment:
+            DESK_API_BASE_URL: "${DESK_API_BASE_URL}"
+            DESK_API_KEY: "${DESK_API_KEY}"
+            DESK_API_TIMEOUT_SECONDS: "${DESK_API_TIMEOUT_SECONDS}"
+            RABBITMQ_HOST: "${RABBITMQ_HOST}"
+            RABBITMQ_PORT: "${RABBITMQ_PORT}"
+            RABBITMQ_USERNAME: "${RABBITMQ_USERNAME}"
+            RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD}"
+            RABBITMQ_EXCHANGE: "${RABBITMQ_EXCHANGE}"
+            RABBITMQ_EXCHANGE_TYPE: "${RABBITMQ_EXCHANGE_TYPE}"
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
