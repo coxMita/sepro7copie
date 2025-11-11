@@ -24,7 +24,7 @@ volumes:
 
 services:
     gateway:
-        image: 44sven/sepro-g7-gateway:v0.0.5
+        image: 44sven/sepro-g7-gateway:v0.0.6
         container_name: gateway
         restart: unless-stopped
         ports:
@@ -242,7 +242,7 @@ services:
             - occupancy-net
 
     scheduler-service:
-        image: 44sven/sepro-g7-scheduling-service:v1.0.8
+        image: 44sven/sepro-g7-scheduling-service:v1.0.9
         container_name: scheduler-service
         restart: unless-stopped
         ports:

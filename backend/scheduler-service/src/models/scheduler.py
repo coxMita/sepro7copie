@@ -57,7 +57,7 @@ class DeskActionResult(BaseModel):
 
     desk_id: str
     success: bool
-    position: int
+    position_mm: int
 
 
 class HealthResponse(BaseModel):

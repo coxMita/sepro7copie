@@ -14,11 +14,11 @@ export interface DeskFeatures {
 export interface Desk {
   id: string
   status: DeskStatus
-  features: string[] // ['near-window', 'dual-monitor']
-  floor: number // 0 or 1
+  features: string[]
+  floor: number
   bookedBy?: string
   isFavorite?: boolean
-  height: number
+  height?: number 
 }
 
 export interface Booking {

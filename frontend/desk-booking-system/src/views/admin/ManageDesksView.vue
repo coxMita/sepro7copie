@@ -1,76 +1,93 @@
 <script setup lang="ts">
 import { useDeskData } from '@/composables/useDeskData'
 import { useAdminDeskManagement } from '@/composables/useAdminDeskManagement'
-
+import { schedulerApi } from '@/services/api'
 import { ref } from 'vue'
 
 const { desks, userBookings } = useDeskData()
-
 const { desksByFloor } = useAdminDeskManagement(desks, userBookings)
 
 const deskHeight = ref(100)
 const changeHeightFeedbackMessage = ref('')
 const changeHeightFeedbackVisible = ref(false)
-const changeHeightFeedbackType = ref('success')
+const changeHeightFeedbackType = ref<'success' | 'error' | 'info' | 'warning'>('success')
+const isChangingHeight = ref(false)
 
 const scheduledDate = ref('')
 const scheduledTime = ref('')
 const scheduledHeight = ref(100)
 const scheduleFeedbackMessage = ref('')
 const scheduleFeedbackVisible = ref(false)
-const scheduleFeedbackType = ref('success')
+const scheduleFeedbackType = ref<'success' | 'error' | 'info' | 'warning'>('success')
 
 const today = new Date().toISOString().split('T')[0]
 
-const changeHeightForAllDesks = () => {
-  // Reset feedback visibility to ensure it updates properly
+const changeHeightForAllDesks = async () => {
   changeHeightFeedbackVisible.value = false
+  isChangingHeight.value = true
 
-  if (deskHeight.value < 50 || deskHeight.value > 150) {
-    // Invalid height feedback
+  // Validate height in cm (68-120 cm range for desk simulator)
+  if (deskHeight.value < 68 || deskHeight.value > 120) {
     changeHeightFeedbackMessage.value =
-      'Invalid height! Please enter a value between 50 and 150 cm.'
-    changeHeightFeedbackType.value = 'error' // Set feedback type to red
+      'Invalid height! Please enter a value between 68 and 120 cm.'
+    changeHeightFeedbackType.value = 'error'
     changeHeightFeedbackVisible.value = true
-    setTimeout(() => (changeHeightFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
+    isChangingHeight.value = false
+    setTimeout(() => (changeHeightFeedbackVisible.value = false), 3000)
     return
-  } else {
-    // Valid height feedback
-    changeHeightFeedbackMessage.value = `All desks have been successfully set to ${deskHeight.value} cm.`
-    changeHeightFeedbackType.value = 'success' // Set feedback type to green
-    changeHeightFeedbackVisible.value = true
-    setTimeout(() => (changeHeightFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
   }
 
-  // Valid height feedback
-  desksByFloor.value.forEach((desk) => {
-    desk.height = deskHeight.value
-  })
+  try {
+    // Convert cm to mm for the API (desk simulator uses mm)
+    const positionMm = deskHeight.value * 10
 
-  changeHeightFeedbackMessage.value = `All desks have been successfully set to ${deskHeight.value} cm.`
-  changeHeightFeedbackType.value = 'success' // Set feedback type to green
-  changeHeightFeedbackVisible.value = true
-  setTimeout(() => (changeHeightFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
+    console.log(`Setting all desks to ${deskHeight.value} cm (${positionMm} mm)`)
+
+    // Call the scheduler service via gateway
+    const results = await schedulerApi.setAllDesksPosition(positionMm)
+
+    // Count successful operations
+    const successCount = results.filter((r: any) => r.success).length
+    const totalCount = results.length
+
+    // Update local state for immediate UI feedback
+    desksByFloor.value.forEach((desk) => {
+      desk.height = deskHeight.value
+    })
+
+    changeHeightFeedbackMessage.value = `Successfully set ${successCount}/${totalCount} desks to ${deskHeight.value} cm (${positionMm} mm).`
+    changeHeightFeedbackType.value = successCount === totalCount ? 'success' : 'warning'
+    changeHeightFeedbackVisible.value = true
+    setTimeout(() => (changeHeightFeedbackVisible.value = false), 5000)
+  } catch (error: any) {
+    console.error('Error changing desk heights:', error)
+    changeHeightFeedbackMessage.value = 
+      error.response?.data?.detail || 
+      'Failed to change desk heights. Please check if the scheduler service is running.'
+    changeHeightFeedbackType.value = 'error'
+    changeHeightFeedbackVisible.value = true
+    setTimeout(() => (changeHeightFeedbackVisible.value = false), 5000)
+  } finally {
+    isChangingHeight.value = false
+  }
 }
 
 const scheduleHeightAdjustment = () => {
-  // Reset feedback visibility to ensure it updates properly
   scheduleFeedbackVisible.value = false
 
   if (
     !scheduledDate.value ||
     !scheduledTime.value ||
-    scheduledHeight.value < 50 ||
-    scheduledHeight.value > 150
+    scheduledHeight.value < 68 ||
+    scheduledHeight.value > 120
   ) {
-    // Invalid height feedback
     scheduleFeedbackMessage.value =
-      scheduledHeight.value < 50 || scheduledHeight.value > 150
-        ? 'Invalid height! Please enter a value between 50 and 150 cm.'
+      scheduledHeight.value < 68 || scheduledHeight.value > 120
+        ? 'Invalid height! Please enter a value between 68 and 120 cm.'
         : 'Please select a valid date, time, and height for scheduling.'
-    scheduleFeedbackType.value = 'error' // Set feedback type to red
+    scheduleFeedbackType.value = 'error'
     scheduleFeedbackVisible.value = true
-    setTimeout(() => (scheduleFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
+    setTimeout(() => (scheduleFeedbackVisible.value = false), 3000)
     return
   }
 
@@ -84,21 +101,21 @@ const scheduleHeightAdjustment = () => {
         desk.height = scheduledHeight.value
       })
       scheduleFeedbackMessage.value = `Desks have been adjusted to ${scheduledHeight.value} cm on ${scheduledDate.value} at ${scheduledTime.value}.`
-      scheduleFeedbackType.value = 'success' // Set feedback type to green
+      scheduleFeedbackType.value = 'success'
       scheduleFeedbackVisible.value = true
-      setTimeout(() => (scheduleFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
+      setTimeout(() => (scheduleFeedbackVisible.value = false), 3000)
     }, delay)
 
     scheduleFeedbackMessage.value = `Height adjustment scheduled for ${scheduledDate.value} at ${scheduledTime.value} to ${scheduledHeight.value} cm.`
-    scheduleFeedbackType.value = 'success' // Set feedback type to green
+    scheduleFeedbackType.value = 'success'
     scheduleFeedbackVisible.value = true
-    setTimeout(() => (scheduleFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
+    setTimeout(() => (scheduleFeedbackVisible.value = false), 3000)
   } else {
     scheduleFeedbackMessage.value =
       'The selected date and time are in the past. Please choose a future date and time.'
-    scheduleFeedbackType.value = 'error' // Set feedback type to red
+    scheduleFeedbackType.value = 'error'
     scheduleFeedbackVisible.value = true
-    setTimeout(() => (scheduleFeedbackVisible.value = false), 3000) // Hide feedback after 3 seconds
+    setTimeout(() => (scheduleFeedbackVisible.value = false), 3000)
   }
 }
 </script>
@@ -120,7 +137,14 @@ const scheduleHeightAdjustment = () => {
       <v-row align="center">
         <!-- Change Height (All Desks) Button -->
         <v-col cols="6">
-          <v-btn color="primary" @click="changeHeightForAllDesks">Change Height (All Desks)</v-btn>
+          <v-btn 
+            color="primary" 
+            @click="changeHeightForAllDesks"
+            :loading="isChangingHeight"
+            :disabled="isChangingHeight"
+          >
+            Change Height (All Desks)
+          </v-btn>
         </v-col>
 
         <!-- Feedback Bubble for Change Height -->
@@ -135,11 +159,14 @@ const scheduleHeightAdjustment = () => {
       <v-row class="mt-4">
         <v-col cols="6">
           <v-text-field
-            v-model="deskHeight"
+            v-model.number="deskHeight"
             label="Set Desk Height (cm)"
             type="number"
-            min="50"
-            max="150"
+            min="68"
+            max="120"
+            hint="Valid range: 68-120 cm (680-1200 mm)"
+            persistent-hint
+            :disabled="isChangingHeight"
           />
         </v-col>
       </v-row>
@@ -147,6 +174,7 @@ const scheduleHeightAdjustment = () => {
 
     <!-- Scheduling -->
     <v-card elevation="2" class="pa-6 mb-6">
+      <h3 class="text-h6 mb-4">Schedule Height Adjustment</h3>
       <v-row>
         <v-col cols="6">
           <v-text-field v-model="scheduledDate" label="Schedule Date" type="date" :min="today" />
@@ -163,11 +191,13 @@ const scheduleHeightAdjustment = () => {
       <v-row>
         <v-col cols="6">
           <v-text-field
-            v-model="scheduledHeight"
+            v-model.number="scheduledHeight"
             label="Scheduled Desk Height (cm)"
             type="number"
-            min="50"
-            max="150"
+            min="68"
+            max="120"
+            hint="Valid range: 68-120 cm (680-1200 mm)"
+            persistent-hint
           />
         </v-col>
       </v-row>
@@ -186,28 +216,6 @@ const scheduleHeightAdjustment = () => {
 </template>
 
 <style scoped>
-.desk-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-  gap: 12px;
-}
-.desk-button {
-  aspect-ratio: 1;
-  font-size: 0.75rem;
-  font-weight: 600;
-  position: relative;
-}
-.desk-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-.desk-features {
-  display: flex;
-  gap: 2px;
-  margin-top: 2px;
-}
 .text-success {
   color: green;
   font-weight: bold;
