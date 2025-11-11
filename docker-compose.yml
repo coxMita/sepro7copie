@@ -264,3 +264,24 @@ services:
                 condition: service_healthy
         extra_hosts:
             - "host.docker.internal:host-gateway"
+
+    scheduler-db:
+        image: postgres:17
+        container_name: scheduler-db
+        restart: always
+        environment:
+            POSTGRES_USER: ${SCHEDULER_DB_USER}
+            POSTGRES_PASSWORD: ${SCHEDULER_DB_PASS}
+            POSTGRES_DB: ${SCHEDULER_DB_NAME}
+        ports:
+            - "5436:5432"
+        volumes:
+            - scheduler_db_data:/var/lib/postgresql/data
+        networks:
+            - scheduler-net
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${SCHEDULER_DB_USER} -d ${SCHEDULER_DB_NAME}"]
+            interval: 5s
+            timeout: 10s
+            retries: 5
+            start_period: 5s

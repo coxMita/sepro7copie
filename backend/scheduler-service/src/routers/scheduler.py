@@ -1,8 +1,10 @@
 import logging
 from typing import Any, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session
 
+from src.api.dependencies import get_db_session
 from src.models.scheduler import (
     DeskActionResult,
     DeskPositionRequest,
@@ -26,8 +28,7 @@ def health_check() -> HealthResponse:
         running = scheduler_service.is_running()
         jobs_count = scheduler_service.get_jobs_count()
     except Exception as e:
-        logger.exception("Health check failure: %s", e)
-        # If the scheduler isn't initialized yet, surface a clear status
+        logger.exception(f"Health check failure: {e}")
         return HealthResponse(status="degraded", scheduler_running=False, jobs_count=0)
 
     return HealthResponse(
@@ -40,16 +41,18 @@ def get_schedules() -> List[Schedule]:
     """Get all scheduled jobs."""
     try:
         jobs = scheduler_service.get_all_jobs()
-        # Ensure it matches your Schedule model schema.
         return jobs
     except Exception as e:
-        logger.exception("Error fetching schedules: %s", e)
+        logger.exception(f"Error fetching schedules: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch schedules") from e
 
 
 @router.post("/schedules", status_code=201)
-def create_schedule(schedule: ScheduleCreate) -> ScheduleResponse:
-    """Create a new schedule.
+def create_schedule(
+    schedule: ScheduleCreate,
+    session: Session = Depends(get_db_session),
+) -> ScheduleResponse:
+    """Create a new schedule and persist to database.
 
     Example body:
     {
@@ -62,6 +65,8 @@ def create_schedule(schedule: ScheduleCreate) -> ScheduleResponse:
     """
     try:
         job_id = schedule.id or schedule.name.lower().replace(" ", "_")
+
+        # Add to scheduler and save to database
         result = scheduler_service.add_schedule(
             job_id=job_id,
             name=schedule.name,
@@ -70,6 +75,7 @@ def create_schedule(schedule: ScheduleCreate) -> ScheduleResponse:
             hour=schedule.cron.hour,
             minute=schedule.cron.minute,
             day_of_week=schedule.cron.day_of_week,
+            session=session,  # Pass session for DB persistence
         )
 
         return ScheduleResponse(
@@ -80,21 +86,25 @@ def create_schedule(schedule: ScheduleCreate) -> ScheduleResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.exception("Error creating schedule: %s", e)
+        logger.exception(f"Error creating schedule: {e}")
         raise HTTPException(status_code=500, detail="Failed to create schedule") from e
 
 
 @router.delete("/schedules/{job_id}")
-def delete_schedule(job_id: str) -> dict[str, str]:
-    """Delete a scheduled job."""
+def delete_schedule(
+    job_id: str,
+    session: Session = Depends(get_db_session),
+) -> dict[str, str]:
+    """Delete a scheduled job from APScheduler and database."""
     try:
-        scheduler_service.remove_schedule(job_id)
-        return {"message": "Schedule %s deleted successfully" % job_id}
+        # Remove from scheduler and database
+        scheduler_service.remove_schedule(job_id, session=session)
+        return {"message": f"Schedule {job_id} deleted successfully"}
     except KeyError as e:
-        detail = "Schedule %s not found" % job_id
+        detail = f"Schedule {job_id} not found"
         raise HTTPException(status_code=404, detail=detail) from e
     except Exception as e:
-        logger.exception("Error deleting schedule %s: %s", job_id, e)
+        logger.exception(f"Error deleting schedule {job_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete schedule") from e
 
 
@@ -113,7 +123,7 @@ def set_position(request: DeskPositionRequest) -> List[DeskActionResult]:
             context={"trigger": "manual", "endpoint": "position"},
         )
     except Exception as e:
-        logger.exception("Set position error: %s", e)
+        logger.exception(f"Set position error: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to set desk position"
         ) from e
@@ -131,5 +141,5 @@ def get_desks() -> List[dict[str, Any]]:
                 desks_info.append({"id": desk_id, "state": state})
         return desks_info
     except Exception as e:
-        logger.exception("Error fetching desks: %s", e)
+        logger.exception(f"Error fetching desks: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch desks") from e

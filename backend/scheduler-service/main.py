@@ -5,6 +5,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.dependencies import get_db_session
 from src.routers import scheduler as scheduler_router
 from src.services.rabbitmq_client import rabbitmq_client
 from src.services.scheduler_service import scheduler_service
@@ -42,33 +43,58 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info("Starting scheduler service...")
             scheduler_service.start()
 
-        logger.info("Calling setup_default_schedules()...")
-        scheduler_service.setup_default_schedules()
+        # Load schedules from database
+        logger.info("Loading schedules from database...")
+        db_session = next(get_db_session())
+        try:
+            scheduler_service.load_schedules_from_db(db_session)
+        finally:
+            db_session.close()
 
+        # Check if any schedules were loaded
         jobs = scheduler_service.get_all_jobs()
-        logger.info("Schedules initialized. Total jobs: %d", len(jobs))
+        logger.info(f"Total jobs after database load: {len(jobs)}")
+
+        # If no schedules exist, create defaults
+        if len(jobs) == 0:
+            logger.info("No schedules found in database. Creating defaults...")
+            db_session = next(get_db_session())
+            try:
+                scheduler_service.setup_default_schedules(db_session)
+            finally:
+                db_session.close()
+
+            # Verify defaults were created
+            jobs = scheduler_service.get_all_jobs()
+            logger.info(f"Total jobs after creating defaults: {len(jobs)}")
+
+        # Log all schedules
         if jobs:
+            logger.info("Active schedules:")
             for job in jobs:
-                # support both 'id' and 'job_id' keys, depending on your service
                 jid = job.get("id") or job.get("job_id")
                 jname = job.get("name") or job.get("job_name") or "<unnamed>"
-                logger.info("  ✓ %s: %s", jid, jname)
+                next_run = job.get("next_run") or "not scheduled"
+                logger.info(f"  ✓ {jid}: {jname} (next: {next_run})")
         else:
             logger.warning("  ⚠ No jobs were created!")
+
     except Exception as e:
-        logger.exception("ERROR during startup: %s", e)
+        logger.exception(f"ERROR during startup: {e}")
 
     # Yield to serve requests
     yield
 
     # Shutdown
+    logger.info("=" * 60)
     logger.info("APPLICATION SHUTDOWN")
+    logger.info("=" * 60)
     try:
         if hasattr(scheduler_service, "shutdown"):
             scheduler_service.shutdown()
-            rabbitmq_client.disconnect()
+        rabbitmq_client.disconnect()
     except Exception as e:  # noqa: BLE001
-        logger.exception("Error during shutdown: %s", e)
+        logger.exception(f"Error during shutdown: {e}")
 
 
 # ----------------------------
@@ -76,7 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # ----------------------------
 app = FastAPI(
     title="Desk Scheduler Service",
-    version="0.1.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -99,18 +125,27 @@ app.include_router(scheduler_router.router)
 @app.get("/")
 def get_root() -> dict[str, str]:
     """Health endpoint for the Scheduler Service."""
-    return {"service": "Desk Scheduler Service", "status": "running"}
+    return {
+        "service": "Desk Scheduler Service",
+        "status": "running",
+        "version": "1.1.0",
+    }
 
 
 @app.get("/debug/setup")
 def debug_setup() -> dict[str, object]:
     """Manually trigger default schedule setup."""
     try:
-        scheduler_service.setup_default_schedules()
+        db_session = next(get_db_session())
+        try:
+            scheduler_service.setup_default_schedules(db_session)
+        finally:
+            db_session.close()
+
         jobs = scheduler_service.get_all_jobs()
         return {
             "status": "success",
-            "message": "Setup called, %d jobs exist" % len(jobs),
+            "message": f"Setup called, {len(jobs)} jobs exist",
             "jobs": jobs,
         }
     except Exception as e:  # noqa: BLE001

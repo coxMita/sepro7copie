@@ -4,18 +4,20 @@ from typing import Any, Dict, List
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.triggers.cron import CronTrigger
+from sqlmodel import Session
 
+from src.models.db.schedule import Schedule as DBSchedule
+from src.repositories.schedule_repository import ScheduleRepository
 from src.services.desk_service import DeskService
 
 logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
-    """Service for managing scheduled desk operations."""
+    """Service for managing scheduled desk operations with database persistence."""
 
     def __init__(self) -> None:
-        # In-memory scheduler by default (no jobstore).
-        # You can swap to a DB jobstore later.
+        # In-memory scheduler
         self.scheduler = BackgroundScheduler()
         logger.info("Scheduler service initialized (not started yet)")
 
@@ -60,8 +62,114 @@ class SchedulerService:
             for job in jobs
         ]
 
+    # -------- database operations --------
+    def load_schedules_from_db(self, session: Session) -> None:
+        """Load all active schedules from the database.
+
+        Args:
+            session: Database session for querying schedules.
+
+        """
+        logger.info("Loading schedules from database...")
+        repo = ScheduleRepository(session)
+        schedules = repo.get_active()
+
+        loaded_count = 0
+        for schedule in schedules:
+            try:
+                self._add_schedule_to_apscheduler(
+                    job_id=schedule.job_id,
+                    name=schedule.name,
+                    action=schedule.action,
+                    position_mm=schedule.position_mm,
+                    hour=schedule.hour,
+                    minute=schedule.minute,
+                    day_of_week=schedule.day_of_week,
+                )
+                loaded_count += 1
+                logger.info(f"✓ Loaded schedule from DB: {schedule.job_id}")
+            except Exception as e:
+                logger.error(f"✗ Failed to load schedule {schedule.job_id}: {e}")
+
+        logger.info(f"Loaded {loaded_count}/{len(schedules)} schedules from database")
+
+    def _save_schedule_to_db(
+        self,
+        session: Session,
+        job_id: str,
+        name: str,
+        action: str,
+        position_mm: int,
+        hour: int,
+        minute: int,
+        day_of_week: str,
+    ) -> DBSchedule:
+        """Save or update a schedule in the database.
+
+        Args:
+            session: Database session.
+            job_id: Unique job identifier.
+            name: Schedule name.
+            action: "raise" or "lower".
+            position_mm: Target position in millimeters.
+            hour: Hour to execute (0-23).
+            minute: Minute to execute (0-59).
+            day_of_week: Days to run.
+
+        Returns:
+            DBSchedule: The saved schedule entity.
+
+        """
+        repo = ScheduleRepository(session)
+        existing = repo.get_by_job_id(job_id)
+
+        if existing:
+            # Update existing
+            existing.name = name
+            existing.action = action
+            existing.position_mm = position_mm
+            existing.hour = hour
+            existing.minute = minute
+            existing.day_of_week = day_of_week
+            existing.is_active = True
+            updated = repo.update(existing)
+            logger.info(f"Updated schedule in database: {job_id}")
+            return updated
+        else:
+            # Create new
+            db_schedule = DBSchedule(
+                job_id=job_id,
+                name=name,
+                action=action,
+                position_mm=position_mm,
+                hour=hour,
+                minute=minute,
+                day_of_week=day_of_week,
+                is_active=True,
+            )
+            created = repo.create(db_schedule)
+            logger.info(f"Created schedule in database: {job_id}")
+            return created
+
+    def _delete_schedule_from_db(self, session: Session, job_id: str) -> bool:
+        """Delete a schedule from the database.
+
+        Args:
+            session: Database session.
+            job_id: Job identifier to delete.
+
+        Returns:
+            bool: True if deleted, False if not found.
+
+        """
+        repo = ScheduleRepository(session)
+        deleted = repo.delete_by_job_id(job_id)
+        if deleted:
+            logger.info(f"Deleted schedule from database: {job_id}")
+        return deleted
+
     # -------- actions --------
-    def add_schedule(  # noqa: PLR0913
+    def add_schedule(
         self,
         job_id: str,
         name: str,
@@ -70,13 +178,25 @@ class SchedulerService:
         hour: int,
         minute: int,
         day_of_week: str = "*",
+        session: Session | None = None,
     ) -> Dict[str, Any]:
-        """Add a new scheduled job.
+        """Add a new scheduled job and persist to database.
+
+        Args:
+            job_id: Unique job identifier.
+            name: Human-readable name.
+            action: "raise" or "lower".
+            position_mm: Target position in millimeters.
+            hour: Hour to execute (0-23).
+            minute: Minute to execute (0-59).
+            day_of_week: Days to run (e.g., '*', 'mon-fri').
+            session: Optional database session for persistence.
 
         Returns:
-            {"job_id": <str>, "next_run": <iso8601 or None>}
+            Dict containing job_id and next_run time.
 
         """
+        # Validate action
         action_norm = (action or "").strip().lower()
         if action_norm not in {"raise", "lower"}:
             raise ValueError(f"Invalid action: {action}. Use 'raise' or 'lower'.")
@@ -84,7 +204,66 @@ class SchedulerService:
         if not isinstance(position_mm, int) or position_mm <= 0:
             raise ValueError("position_mm must be a positive integer (millimeters).")
 
-        # Map action -> callable
+        # Add to APScheduler
+        job = self._add_schedule_to_apscheduler(
+            job_id=job_id,
+            name=name,
+            action=action_norm,
+            position_mm=position_mm,
+            hour=hour,
+            minute=minute,
+            day_of_week=day_of_week,
+        )
+
+        # Save to database if session provided
+        if session:
+            try:
+                self._save_schedule_to_db(
+                    session=session,
+                    job_id=job_id,
+                    name=name,
+                    action=action_norm,
+                    position_mm=position_mm,
+                    hour=hour,
+                    minute=minute,
+                    day_of_week=day_of_week,
+                )
+            except Exception as e:
+                logger.error(f"Failed to persist schedule to database: {e}")
+                # Don't fail the whole operation if DB save fails
+                # The schedule is still in APScheduler
+
+        return {
+            "job_id": job.id,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+        }
+
+    def _add_schedule_to_apscheduler(
+        self,
+        job_id: str,
+        name: str,
+        action: str,
+        position_mm: int,
+        hour: int,
+        minute: int,
+        day_of_week: str,
+    ):
+        """Add a schedule to APScheduler only (no database).
+
+        Args:
+            job_id: Unique job identifier.
+            name: Schedule name.
+            action: "raise" or "lower".
+            position_mm: Target position.
+            hour: Hour to execute.
+            minute: Minute to execute.
+            day_of_week: Days to run.
+
+        Returns:
+            APScheduler job object.
+
+        """
+
         def _job_func() -> None:
             context = {
                 "trigger": "schedule",
@@ -92,7 +271,7 @@ class SchedulerService:
                 "job_name": name,
             }
 
-            if action_norm == "raise":
+            if action == "raise":
                 DeskService.raise_all_desks(position_mm, context=context)
             else:
                 DeskService.lower_all_desks(position_mm, context=context)
@@ -101,7 +280,7 @@ class SchedulerService:
         trigger = CronTrigger(
             hour=hour,
             minute=minute,
-            day_of_week=day_of_week,  # e.g. '*', 'mon-fri', '0-6'
+            day_of_week=day_of_week,
         )
 
         # Add (or replace) job
@@ -111,33 +290,49 @@ class SchedulerService:
             id=job_id,
             name=name,
             replace_existing=True,
-            coalesce=True,  # optional: collapse missed runs into one
-            max_instances=1,  # optional: avoid overlapping same job
+            coalesce=True,
+            max_instances=1,
         )
 
         logger.info(
-            "Added/updated schedule: id=%s name=%s action=%s pos=%s cron=%s next=%s",
-            job.id,
-            name,
-            action_norm,
-            position_mm,
-            str(trigger),
-            job.next_run_time.isoformat() if job.next_run_time else None,
+            f"Added/updated schedule in APScheduler: id={job.id} name={name} "
+            f"action={action} pos={position_mm}mm cron={str(trigger)} "
+            f"next={job.next_run_time.isoformat() if job.next_run_time else None}"
         )
 
-        return {
-            "job_id": job.id,
-            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-        }
+        return job
 
-    def remove_schedule(self, job_id: str) -> None:
-        """Remove a scheduled job."""
-        self.scheduler.remove_job(job_id)
-        logger.info("Removed schedule: %s", job_id)
+    def remove_schedule(self, job_id: str, session: Session | None = None) -> None:
+        """Remove a scheduled job from APScheduler and database.
+
+        Args:
+            job_id: Job identifier to remove.
+            session: Optional database session for deletion.
+
+        """
+        # Remove from APScheduler
+        try:
+            self.scheduler.remove_job(job_id)
+            logger.info(f"Removed schedule from APScheduler: {job_id}")
+        except Exception as e:
+            logger.warning(f"Failed to remove job from APScheduler: {e}")
+
+        # Remove from database if session provided
+        if session:
+            try:
+                self._delete_schedule_from_db(session, job_id)
+            except Exception as e:
+                logger.error(f"Failed to delete schedule from database: {e}")
 
     # -------- defaults --------
-    def setup_default_schedules(self) -> None:
-        """Set up default schedules (idempotent via replace_existing=True)."""
+    def setup_default_schedules(self, session: Session | None = None) -> None:
+        """Set up default schedules (idempotent via replace_existing=True).
+
+        Args:
+            session: Optional database session for persistence.
+
+        """
+        logger.info("Setting up default schedules...")
         try:
             # Cleaning mode: raise desks at 20:00 every day
             self.add_schedule(
@@ -148,6 +343,7 @@ class SchedulerService:
                 hour=20,
                 minute=0,
                 day_of_week="*",
+                session=session,
             )
 
             # End cleaning mode: lower desks at 21:00 every day
@@ -159,6 +355,7 @@ class SchedulerService:
                 hour=21,
                 minute=0,
                 day_of_week="*",
+                session=session,
             )
 
             # Morning standup on weekdays
@@ -170,11 +367,12 @@ class SchedulerService:
                 hour=9,
                 minute=0,
                 day_of_week="mon-fri",
+                session=session,
             )
 
-            logger.info("Default schedules initialized")
+            logger.info("✓ Default schedules initialized")
         except Exception as e:
-            logger.exception("Error setting up default schedules: %s", e)
+            logger.exception(f"Error setting up default schedules: {e}")
 
 
 # Global scheduler instance

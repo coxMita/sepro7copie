@@ -68,46 +68,21 @@ docker logs -f scheduler-service
 
 ## Managing Schedules
 
-### Adding Schedules in Code
+### Managing Schedules via the API
 
-Edit `src/services/scheduler_service.py` in the `setup_default_schedules()` method:
+Schedules are now stored in PostgreSQL (`schedule_jobs` table) and mirrored into
+APScheduler when the service starts. You can create, update, or delete schedules
+through the REST API exposed by the service:
 
-```python
-def setup_default_schedules(self) -> None:
-    """Setup your custom schedules here"""
-    
-    # Example: Morning standup at 9:00 AM on weekdays
-    self.add_schedule(
-        job_id='morning_standup',
-        name='Morning Standup',
-        action='raise',
-        position_mm=1100,
-        hour=9,
-        minute=0,
-        day_of_week='mon-fri'
-    )
-    
-    # Example: Lunch break at 12:00 PM
-    self.add_schedule(
-        job_id='lunch_break',
-        name='Lunch Break',
-        action='lower',
-        position_mm=680,
-        hour=12,
-        minute=0,
-        day_of_week='mon-fri'
-    )
-    
-    # Example: End of day at 6:00 PM
-    self.add_schedule(
-        job_id='end_of_day',
-        name='End of Day',
-        action='lower',
-        position_mm=680,
-        hour=18,
-        minute=0,
-        day_of_week='mon-fri'
-    )
+- `POST /scheduler/api/v1/schedules` – create a new schedule.
+- `PUT /scheduler/api/v1/schedules/{job_id}` – update an existing schedule.
+- `DELETE /scheduler/api/v1/schedules/{job_id}` – remove a schedule.
+- `GET /scheduler/api/v1/schedules` – list all schedules along with the next run.
+
+When running locally, `docker-compose.standalone.yml` provisions a PostgreSQL
+instance (`scheduler-db`) and seeds default schedules on first startup. The
+`/scheduler/api/v1/schedules` endpoint returns the combined database and runtime
+state so that the frontend admin console can manage entries.
 ```
 
 ### Schedule Parameters
