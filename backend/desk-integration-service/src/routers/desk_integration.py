@@ -1,37 +1,86 @@
-# Dummy Router for demonstration purposes
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from dataclasses import dataclass
+
+from fastapi import APIRouter, Response, status
+
+from src.models.dto.desk import Desk
+from src.models.dto.desk_config import DeskConfig
+from src.models.dto.desk_error import DeskError
+from src.models.dto.desk_state import DeskState
+from src.models.dto.desk_usage import DeskUsage
+from src.services.desk_service import DeskService
 
 
-class Booking(BaseModel):
-    booking_id: int
-    user_id: int
-    desk_id: int
+@dataclass(frozen=True)
+class _DeskServiceConfig:
+    """Configuration container for the DeskService."""
+
+    base_url: str
+    api_key: str
 
 
-bookings = [
-    Booking(booking_id=1, user_id=1, desk_id=1),
-    Booking(booking_id=2, user_id=2, desk_id=2),
-]
+DESK_NOT_FOUND_MESSAGE = {"detail": "Desk not found"}
+desks_service = DeskService()
 
-router = APIRouter(prefix="/api/v1", tags=["bookings"])
+router = APIRouter(prefix="/api/v1", tags=["desks"])
 
 
-@router.get("/bookings")
-def get_bookings():
-    return bookings
+@router.get("/desks")
+def get_desks() -> list[str]:
+    """Retrieve the list of all desks."""
+    return desks_service.get_all_desks()
 
 
-@router.get("/bookings/{booking_id}", response_model=Booking)
-def get_booking_with_id(booking_id: int) -> Booking:
-    if booking_id not in [booking.booking_id for booking in bookings]:
-        raise HTTPException(
-            status_code=404, detail=f"Booking with id={booking_id} not found"
-        )
-    return next(booking for booking in bookings if booking.booking_id == booking_id)
+@router.get("/desks/{desk_id}")
+def get_desk_by_id(desk_id: str, response: Response) -> Desk | None:
+    """Retrieve a specific desk by its ID."""
+    desk = desks_service.get_desk_by_id(desk_id)
+    if desk is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+    return desk or DESK_NOT_FOUND_MESSAGE
 
 
-@router.post("/bookings", response_model=list[Booking])
-def create_booking(booking: Booking) -> list[Booking]:
-    bookings.append(booking)
-    return bookings
+@router.get("/desks/{desk_id}/config")
+def get_config(desk_id: str, response: Response) -> DeskConfig:
+    """Retrieve the configuration of a specific desk."""
+    usage_stats = desks_service.get_desk_config(desk_id)
+    if usage_stats is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+    return usage_stats or DESK_NOT_FOUND_MESSAGE
+
+
+@router.get("/desks/{desk_id}/state")
+def get_state(desk_id: str, response: Response) -> DeskState | None:
+    """Retrieve the current state of a specific desk."""
+    desk_state = desks_service.get_desk_state(desk_id)
+    if desk_state is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+    return desk_state or DESK_NOT_FOUND_MESSAGE
+
+
+@router.put("/desks/{desk_id}/state")
+def set_desk_height(
+    desk_id: str, position_mm: int, response: Response
+) -> DeskState | None:  # noqa: E501
+    """Set a desk to a specific height."""
+    desk_state = desks_service.set_desk_position(desk_id, position_mm)
+    if desk_state is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+    return desk_state or DESK_NOT_FOUND_MESSAGE
+
+
+@router.get("/desks/{desk_id}/usage")
+def get_usage(desk_id: str, response: Response) -> DeskUsage:  # noqa: E501
+    """Retrieve usage data for a specific desk."""
+    usage_stats = desks_service.get_desk_usage(desk_id)
+    if usage_stats is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+    return usage_stats or DESK_NOT_FOUND_MESSAGE
+
+
+@router.get("/desks/{desk_id}/errors")
+def get_errors(desk_id: str, response: Response) -> list[DeskError]:
+    """Retrieve error logs for a specific desk."""
+    errors = desks_service.get_desk_errors(desk_id)
+    if errors is None:
+        response.status_code = status.HTTP_404_NOT_FOUND
+    return errors or DESK_NOT_FOUND_MESSAGE
