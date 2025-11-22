@@ -423,7 +423,7 @@ class DeskService:
             position_mm: Target position in millimeters
 
         Returns:
-            API response dict
+            DeskState object with the new desk state
 
         Raises:
             DeskServiceError: If the operation fails
@@ -447,6 +447,28 @@ class DeskService:
         logger.info("✓ Successfully commanded desk %s to %smm", desk_id, position_mm)
 
         try:
-            return response.json()  # type: ignore[return-value]
-        except ValueError:
-            return {"success": True, "position_mm": position_mm}
+            # Parse response from WiFi2BLE API
+            state_data = response.json()
+            
+            # Return proper DeskState object
+            return DeskState(
+                position_mm=state_data.get("position_mm", position_mm),
+                speed_mms=state_data.get("speed_mms", 0),
+                status=state_data.get("status", "moving"),
+                is_position_lost=state_data.get("isPositionLost", False),
+                is_overload_protection_up=state_data.get("isOverloadProtectionUp", False),
+                is_overload_protection_down=state_data.get("isOverloadProtectionDown", False),
+                is_anti_collision=state_data.get("isAntiCollision", False),
+            )
+        except (ValueError, KeyError) as e:
+            logger.warning("Failed to parse desk state response: %s", e)
+            # Return minimal valid DeskState
+            return DeskState(
+                position_mm=position_mm,
+                speed_mms=0,
+                status="unknown",
+                is_position_lost=False,
+                is_overload_protection_up=False,
+                is_overload_protection_down=False,
+                is_anti_collision=False,
+            )

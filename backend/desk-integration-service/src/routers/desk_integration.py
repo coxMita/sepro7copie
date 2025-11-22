@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Response, status
 
+from src.messaging.rabbitmq_publisher import rabbitmq_publisher
 from src.models.dto.desk import Desk
 from src.models.dto.desk_config import DeskConfig
 from src.models.dto.desk_error import DeskError
@@ -60,13 +61,37 @@ def get_state(desk_id: str, response: Response) -> DeskState | None:
 @router.put("/desks/{desk_id}/state")
 def set_desk_height(
     desk_id: str, position_mm: int, response: Response
-) -> DeskState | None:  # noqa: E501
-    """Set a desk to a specific height."""
+) -> DeskState | None:
+    """Set a desk to a specific height and publish event to RabbitMQ."""
+    
+    # Set desk position via WiFi2BLE API
     desk_state = desks_service.set_desk_position(desk_id, position_mm)
+    
     if desk_state is None:
         response.status_code = status.HTTP_404_NOT_FOUND
-    return desk_state or DESK_NOT_FOUND_MESSAGE
-
+        return {"detail": "Desk not found"}
+    
+    # Publish event to RabbitMQ (non-blocking, failures are logged)
+    try:
+        event_payload = {
+            "desk_id": desk_id,
+            "position_mm": position_mm,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "desk-integration-service",
+            "event_type": "height_changed",
+        }
+        
+        rabbitmq_publisher.publish(
+            routing_key="desk.height.changed",
+            payload=event_payload,
+            persistent=True,
+        )
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("Failed to publish RabbitMQ event: %s", e)
+    
+    return desk_state
 
 @router.get("/desks/{desk_id}/usage")
 def get_usage(desk_id: str, response: Response) -> DeskUsage:  # noqa: E501
